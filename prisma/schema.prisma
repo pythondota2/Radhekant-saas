@@ -1,0 +1,336 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  SUPER_ADMIN
+  AGENT
+  CUSTOMER
+}
+
+enum KycStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum SubscriptionStatus {
+  PENDING_PAYMENT
+  PENDING_APPROVAL
+  ACTIVE
+  EXPIRED
+  REJECTED
+}
+
+enum FlightStatus {
+  ACTIVE
+  EXHAUSTED
+  CLOSED
+}
+
+enum BookingStatus {
+  CONFIRMED
+  CANCELLED
+  TICKET_ISSUED
+}
+
+enum TransactionType {
+  CREDIT
+  DEBIT
+}
+
+enum TxStatus {
+  PENDING
+  COMPLETED
+  REJECTED
+}
+
+enum CategoryType {
+  FURNITURE
+  HOME_DECOR
+  HARDWARE
+}
+
+enum OrderStatus {
+  PROCESSING
+  DISPATCHED
+  DELIVERED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PAID
+  PENDING
+  COD
+}
+
+model User {
+  id           String        @id @default(cuid())
+  name         String
+  email        String        @unique
+  passwordHash String
+  phone        String?
+  role         Role          @default(CUSTOMER)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  agentProfile AgentProfile?
+  wallet       Wallet?
+
+  flightListings FlightInventory[] @relation("SellerFlights")
+  productListings Product[]        @relation("SellerProducts")
+  flightBookings  FlightBooking[]
+  orders          Order[]
+}
+
+model AgentProfile {
+  id              String        @id @default(cuid())
+  userId          String        @unique
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agencyName      String
+  agencyLogo      String?
+  bio             String?
+  slug            String        @unique
+  city            String
+  state           String
+  contactPhone    String
+  contactEmail    String
+  whatsappNumber  String?
+  gstin           String?
+  pan             String?
+  kycStatus       KycStatus     @default(PENDING)
+  commissionRate  Float         @default(0)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  subscription    AgentSubscription?
+}
+
+model MembershipPlan {
+  id                 String        @id @default(cuid())
+  name               String
+  slug               String        @unique
+  description        String
+  priceINR           Float
+  billingCycle       String        @default("ANNUAL")
+  maxFlightListings  Int           @default(50)
+  maxProductListings Int           @default(100)
+  features           String        // Stored as JSON string
+  badgeText          String?
+  isActive           Boolean       @default(true)
+  createdAt          DateTime      @default(now())
+
+  subscriptions      AgentSubscription[]
+}
+
+model AgentSubscription {
+  id             String             @id @default(cuid())
+  agentProfileId String             @unique
+  agentProfile   AgentProfile       @relation(fields: [agentProfileId], references: [id], onDelete: Cascade)
+  planId         String
+  plan           MembershipPlan     @relation(fields: [planId], references: [id])
+  status         SubscriptionStatus @default(PENDING_APPROVAL)
+  amountPaidINR  Float
+  paymentMethod  String             @default("BANK_TRANSFER_UTR")
+  utrReference   String?
+  notes          String?
+  startDate      DateTime           @default(now())
+  endDate        DateTime?
+  approvedAt     DateTime?
+  createdAt      DateTime           @default(now())
+}
+
+model Wallet {
+  id           String              @id @default(cuid())
+  userId       String              @unique
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  balance      Float               @default(0)
+  creditLimit  Float               @default(0)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  transactions WalletTransaction[]
+}
+
+model WalletTransaction {
+  id            String          @id @default(cuid())
+  walletId      String
+  wallet        Wallet          @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  type          TransactionType
+  amount        Float
+  balanceAfter  Float
+  referenceType String          // "JOINING_FEE", "FLIGHT_BOOKING", "WALLET_TOPUP", "REFUND"
+  referenceId   String?
+  utrNumber     String?
+  notes         String?
+  status        TxStatus        @default(COMPLETED)
+  createdAt     DateTime        @default(now())
+}
+
+model FlightInventory {
+  id              String         @id @default(cuid())
+  sellerId        String
+  seller          User           @relation("SellerFlights", fields: [sellerId], references: [id])
+  airlineName     String         // "IndiGo", "Air India", "SpiceJet", "Akasa Air"
+  airlineCode     String         // "6E", "AI", "SG", "QP"
+  flightNumber    String         // "6E-205"
+  originCity      String         // "New Delhi"
+  originCode      String         // "DEL"
+  destinationCity String         // "Goa (MOPA)"
+  destinationCode String         // "GOX"
+  departureTime   String         // "06:15"
+  arrivalTime     String         // "08:50"
+  travelDate      String         // "2026-10-15"
+  totalSeats      Int
+  availableSeats  Int
+  netFare         Float          // B2B wholesale rate (INR)
+  retailFare      Float          // Suggested retail / customer fare (INR)
+  baggageInfo     String         @default("15kg Check-in + 7kg Cabin")
+  masterPnr       String?        // Airline Master PNR / Group Ref
+  nameCutoffTime  String?        // e.g. "48 hours before flight"
+  status          FlightStatus   @default(ACTIVE)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  bookings        FlightBooking[]
+}
+
+model FlightBooking {
+  id               String          @id @default(cuid())
+  bookingReference String          @unique // e.g. "RAD-FL-7829"
+  flightId         String
+  flight           FlightInventory @relation(fields: [flightId], references: [id])
+  customerId       String?
+  customer         User?           @relation(fields: [customerId], references: [id])
+  bookedByAgentId  String?         // If booked through an agent
+  totalPassengers  Int
+  totalAmount      Float           // Total paid by customer/agent
+  agentMarkup      Float           @default(0) // Agent markup if applicable
+  status           BookingStatus   @default(CONFIRMED)
+  issuedPnr        String?         // Final ticketed PNR
+  customerName     String
+  customerEmail    String
+  customerPhone    String
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  passengers       Passenger[]
+}
+
+model Passenger {
+  id            String        @id @default(cuid())
+  bookingId     String
+  booking       FlightBooking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  title         String        // "Mr", "Mrs", "Ms", "Master"
+  firstName     String
+  lastName      String
+  age           Int
+  gender        String        // "MALE", "FEMALE", "OTHER"
+  passengerType String        @default("ADULT") // "ADULT", "CHILD", "INFANT"
+  seatNumber    String?
+}
+
+model Category {
+  id          String       @id @default(cuid())
+  name        String
+  slug        String       @unique
+  type        CategoryType
+  description String?
+  image       String?
+  createdAt   DateTime     @default(now())
+
+  products    Product[]
+}
+
+model Product {
+  id               String            @id @default(cuid())
+  sellerId         String
+  seller           User              @relation("SellerProducts", fields: [sellerId], references: [id])
+  categoryId       String
+  category         Category          @relation(fields: [categoryId], references: [id])
+  title            String
+  slug             String            @unique
+  description      String
+  images           String            // JSON string array of image URLs
+  hsnCode          String?
+  gstRate          Float             @default(18)
+  isFlagship       Boolean           @default(false) // True for Client's direct Chinese/Indian imports
+  sourceCountry    String            @default("India") // "China" or "India"
+  dimensions       String?           // e.g. "L 220cm x D 95cm x H 80cm"
+  material         String?           // e.g. "Italian Nappa Leather / Solid Teak"
+  cbmVolume        Float?            // Cubic meters for shipping calculation
+  assemblyRequired Boolean           @default(false)
+  warrantyYears    Int               @default(1)
+  stock            Int               @default(10)
+  priceB2C         Float             // Retail Price (INR)
+  priceB2B         Float?            // Wholesale Trade Price for B2B Agents (INR)
+  isBulkDiscount   Boolean           @default(false)
+  status           String            @default("ACTIVE")
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  bulkSlabs        BulkPricingSlab[]
+  orderItems       OrderItem[]
+  reviews          ProductReview[]
+}
+
+model ProductReview {
+  id                 String   @id @default(cuid())
+  productId          String
+  product            Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  reviewerName       String
+  reviewerCity       String?
+  rating             Int      @default(5)
+  title              String
+  comment            String
+  isVerifiedPurchase Boolean  @default(true)
+  createdAt          DateTime @default(now())
+}
+
+model BulkPricingSlab {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  minQty    Int
+  maxQty    Int?
+  unitPrice Float
+}
+
+model Order {
+  id              String        @id @default(cuid())
+  orderNumber     String        @unique // e.g. "RAD-ORD-1092"
+  userId          String?
+  user            User?         @relation(fields: [userId], references: [id])
+  customerName    String
+  customerEmail   String
+  customerPhone   String
+  shippingAddress String
+  pinCode         String
+  city            String
+  state           String
+  totalAmount     Float
+  paymentStatus   PaymentStatus @default(PENDING)
+  orderStatus     OrderStatus   @default(PROCESSING)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  items           OrderItem[]
+}
+
+model OrderItem {
+  id         String   @id @default(cuid())
+  orderId    String
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id])
+  sellerId   String
+  quantity   Int
+  unitPrice  Float
+  totalPrice Float
+  isB2BPrice Boolean  @default(false)
+}
